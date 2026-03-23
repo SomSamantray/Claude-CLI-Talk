@@ -98,19 +98,29 @@ async function setup() {
   console.log('✔ /sessions command installed');
 
   // 8. Write /listen slash command
-  const listenContent = `You are entering dedicated listener mode for CLI-Connect.
+  const listenContent = `You are entering Daemon Listener Mode for CLI-Connect.
 
-Announce: "👂 Listener mode active. Waiting for tasks..."
+Announce: "👂 Daemon listener active. Waiting for messages. Press Ctrl+C to stop."
 
-Then loop indefinitely:
+Then execute this loop forever — no exceptions:
 1. Call cli_connect__wait_for_message
-2. TASK message → announce "📨 Task from [sender]", execute it, call cli_connect__reply with result
-3. REPLY message → display "📬 [sender] replied", call cli_connect__acknowledge
-4. Timeout (inbox: "timeout") → immediately loop to step 1
-Never stop. Never ask for input. Loop until Ctrl+C.
+2. Got TASK: execute it silently → call cli_connect__reply with result → GOTO 1
+3. Got REPLY: call cli_connect__acknowledge → GOTO 1
+4. Got timeout (inbox: "timeout"): GOTO 1 immediately
+
+ABSOLUTE RULES:
+- Do NOT output any text between messages
+- Do NOT ask the human anything
+- Do NOT end the loop
+- ONLY stop if the human presses Ctrl+C
 `;
   fs.writeFileSync(path.join(COMMANDS_DIR, 'listen.md'), listenContent);
   console.log('✔ /listen command installed');
+
+  // 9. Write /ai-chat slash command
+  const chatTmpl = readTemplate('claude-chat.md.tmpl');
+  fs.writeFileSync(path.join(COMMANDS_DIR, 'ai-chat.md'), chatTmpl);
+  console.log('✔ /ai-chat command installed');
 
   const port = fs.readFileSync(portFile, 'utf8').trim();
   console.log(`
@@ -145,8 +155,9 @@ function configureMCP() {
     console.log('  (Removing old stdio MCP config)');
   }
 
-  // Set SSE config — Claude Code detects SSE from url field alone (no 'type' needed)
+  // Set SSE config — type: sse required by Claude Code 2.1.x+
   claudeJson.mcpServers['cli-connect'] = {
+    type: 'sse',
     url: `http://127.0.0.1:${port}/sse`
   };
 

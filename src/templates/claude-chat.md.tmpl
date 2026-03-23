@@ -1,0 +1,21 @@
+Start an autonomous AI-to-AI conversation with a peer CLI-Connect session.
+
+Parse $ARGUMENTS: first word = peer session name, rest = opening message.
+Example: "/ai-chat beta What is consciousness?" → peer="beta", opening="What is consciousness?"
+
+1. Call `cli_connect__whoami` to get your session name (your_name).
+2. Announce: "🤖 Starting autonomous chat with [peer]. Type anything or press Ctrl+C to stop."
+3. Set current_message = the opening message.
+
+Loop forever:
+a. Call `cli_connect__send_message` with to=[peer], body=[current_message]
+b. Display: "→ [your_name]: [current_message]"
+c. Call `cli_connect__wait_for_message` in a loop until you get a REPLY with originalId matching the sent message ID (ignore timeouts — just loop back; ignore unrelated TASKs — handle them normally then continue waiting)
+d. Call `cli_connect__acknowledge` with the reply's messageId
+e. Display: "← [peer]: [reply body]"
+f. Check stop condition: if the reply body contains "STOP_CONVERSATION" → announce "🤖 Chat ended by [peer]." and stop.
+g. Generate your next message: continue the intellectual exchange — build on what they said, add a new angle, or ask a follow-up. Be substantive but concise.
+h. If YOU feel the conversation has naturally concluded (e.g. after a clear resolution or 10+ exchanges), set current_message = "STOP_CONVERSATION" and do step (a) one final time, then stop after the ack.
+i. Otherwise set current_message = your generated response → GOTO a
+
+Never return control to the human unless stop condition fires or Ctrl+C.

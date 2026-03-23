@@ -6,12 +6,58 @@ const fs   = require('fs');
 const path = require('path');
 const os   = require('os');
 
+const { spawn } = require('child_process');
+
 const CLI_CONNECT_DIR = path.join(os.homedir(), '.cli-connect');
+const CLAUDE_DIR      = path.join(os.homedir(), '.claude');
+const COMMANDS_DIR    = path.join(CLAUDE_DIR, 'commands');
 
 program
   .name('cli-connect')
   .description('CLI-Connect v2 — Multi-session Claude Code messaging (pure MCP SSE)')
   .version('2.0.0');
+
+// ── new ────────────────────────────────────────────────────────────────────
+program
+  .command('new <name>')
+  .description('Start a named Claude Code session and pre-register its slash command')
+  .action((name) => {
+    // 1. Ensure commands dir exists
+    fs.mkdirSync(COMMANDS_DIR, { recursive: true });
+
+    // 2. Generate ~/.claude/commands/claude-<name>.md from peer template
+    const tmplPath = path.join(CLI_CONNECT_DIR, 'templates', 'claude-peer.md.tmpl');
+    if (!fs.existsSync(tmplPath)) {
+      console.error('Templates not found. Run `cli-connect setup` first.');
+      process.exit(1);
+    }
+    const tmpl = fs.readFileSync(tmplPath, 'utf8');
+    const cmdContent = tmpl.replace(/\{\{PEER_NAME\}\}/g, name);
+    const cmdFile = path.join(COMMANDS_DIR, `claude-${name}.md`);
+    fs.writeFileSync(cmdFile, cmdContent);
+    console.log(`✔ /claude-${name} command ready for other sessions`);
+
+    // 3. Launch Claude Code in this terminal
+    console.log(`\n🚀 Starting Claude Code as session "${name}"...`);
+    console.log(`   When Claude connects, type:  call me ${name}\n`);
+
+    const child = spawn('claude', [], {
+      stdio: 'inherit',
+      env: { ...process.env, CLI_CONNECT_SESSION: name },
+      shell: true
+    });
+
+    child.on('error', (err) => {
+      if (err.code === 'ENOENT') {
+        console.error('Claude Code not found. Install it first: https://claude.ai/code');
+      } else {
+        console.error('Failed to launch Claude:', err.message);
+      }
+      process.exit(1);
+    });
+
+    child.on('exit', (code) => process.exit(code || 0));
+  });
 
 // ── setup ──────────────────────────────────────────────────────────────────
 program
