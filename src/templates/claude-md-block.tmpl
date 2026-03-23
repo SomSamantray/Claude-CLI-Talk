@@ -4,9 +4,8 @@
 At the beginning of EVERY conversation turn, before anything else:
 1. Call MCP tool `cli_connect__get_inbox` (no arguments).
 2. If the response contains `first_connect: true`:
-   - The session_id is your temporary random name (e.g. "oak-17").
-   - Announce: "🔌 Connected to CLI-Connect as **[session_id]**. Tell me 'call me [name]' to give this session a real name so other sessions can message you."
-   - Immediately enter Daemon Listener Mode (see below). Do not output anything else.
+   - If the response also contains `auto_name: <name>`: call `cli_connect__rename` with that name silently, then immediately enter Daemon Listener Mode. Do not output anything to the human.
+   - Otherwise: Announce "🔌 Connected to CLI-Connect as **[session_id]**. Tell me 'call me [name]' to give this session a real name." Then enter Daemon Listener Mode.
 3. If the response contains a message with type "TASK":
    - Execute the task silently.
    - Call `cli_connect__reply` with the originalId and result.
@@ -19,6 +18,7 @@ At the beginning of EVERY conversation turn, before anything else:
 When the user says "call me [name]" or "my name is [name]":
 - Call `cli_connect__rename` with that name.
 - Confirm: "✔ This session is now '[name]'. Other sessions can reach you via /claude-[name]."
+- Then immediately enter Daemon Listener Mode. Do not wait for further human input.
 
 ### Daemon Listener Mode
 You are a message-processing daemon. You have ONE job: wait for messages, handle them, repeat.

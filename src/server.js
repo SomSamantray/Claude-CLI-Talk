@@ -61,6 +61,10 @@ const connections = {};
 // nameIndex: name → transportSessionId  (only named sessions)
 const nameIndex = {};
 
+// pendingNames: queue of { name, reservedAt } set by `cli-connect new <name>`
+// Claimed by the next anonymous SSE connection's first get_inbox call
+const pendingNames = [];
+
 // ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------
@@ -238,6 +242,18 @@ function makeToolHandler(transportSessionId) {
         const isFirst = firstInboxCall;
         firstInboxCall = false;
 
+        // On first call, claim a pending name reservation if one exists (from `cli-connect new <name>`)
+        let autoName = null;
+        if (isFirst && !conn.name) {
+          const now = Date.now();
+          // Expire reservations older than 60s, claim the oldest valid one
+          const idx = pendingNames.findIndex(p => now - p.reservedAt < 60000);
+          if (idx !== -1) {
+            autoName = pendingNames.splice(idx, 1)[0].name;
+            // Pre-set the name so it's claimed before rename is called
+          }
+        }
+
         const pending = conn.inbox.filter(
           m => m.status === 'pending' || m.status === 'processing'
         );
@@ -255,7 +271,10 @@ function makeToolHandler(transportSessionId) {
         if (isFirst) {
           lines.push(`session_id: ${conn.shortId}`);
           if (conn.name) lines.push(`session_name: ${conn.name}`);
-          else lines.push(`first_connect: true`);
+          else {
+            lines.push(`first_connect: true`);
+            if (autoName) lines.push(`auto_name: ${autoName}`);
+          }
         }
         if (pending.length === 0) {
           lines.push('inbox: empty');
@@ -502,6 +521,21 @@ app.get('/sessions', (_req, res) => {
       processing: c.inbox.some(m => m.status === 'processing')
     }));
   res.json({ sessions: named });
+});
+
+// POST /reserve-name — called by `cli-connect new <name>` before launching Claude
+// Queues a name so the next SSE connection's first get_inbox auto-claims it
+app.post('/reserve-name', (req, res) => {
+  const { name } = req.body || {};
+  if (!name || !/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(name)) {
+    return res.status(400).json({ error: 'Invalid name' });
+  }
+  // Remove any stale reservation for the same name
+  const idx = pendingNames.findIndex(p => p.name === name);
+  if (idx !== -1) pendingNames.splice(idx, 1);
+  pendingNames.push({ name, reservedAt: Date.now() });
+  logLine(`Reserved name "${name}" for next SSE connection`);
+  res.json({ ok: true, name });
 });
 
 // GET /sse — new Claude Code session connects here

@@ -21,7 +21,7 @@ program
 program
   .command('new <name>')
   .description('Start a named Claude Code session and pre-register its slash command')
-  .action((name) => {
+  .action(async (name) => {
     // 1. Ensure commands dir exists
     fs.mkdirSync(COMMANDS_DIR, { recursive: true });
 
@@ -37,9 +37,29 @@ program
     fs.writeFileSync(cmdFile, cmdContent);
     console.log(`✔ /claude-${name} command ready for other sessions`);
 
-    // 3. Launch Claude Code in this terminal
+    // 3. Reserve the name on the hub so get_inbox returns auto_name on first connect
+    //    (no human "call me <name>" typing required)
+    const portFile = path.join(CLI_CONNECT_DIR, 'port');
+    let port = '27182';
+    try { port = fs.readFileSync(portFile, 'utf8').trim(); } catch (_) {}
+    const tokenFile = path.join(CLI_CONNECT_DIR, 'token');
+    let token = '';
+    try { token = fs.readFileSync(tokenFile, 'utf8').trim(); } catch (_) {}
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/reserve-name`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-CLI-Connect-Token': token },
+        body: JSON.stringify({ name })
+      });
+      if (res.ok) {
+        console.log(`✔ Name "${name}" reserved — Claude will auto-connect as "${name}"`);
+      }
+    } catch (_) {
+      console.warn(`  (Hub not reachable — Claude will need "call me ${name}" manually)`);
+    }
+
+    // 4. Launch Claude Code in this terminal
     console.log(`\n🚀 Starting Claude Code as session "${name}"...`);
-    console.log(`   When Claude connects, type:  call me ${name}\n`);
 
     const child = spawn('claude', [], {
       stdio: 'inherit',
