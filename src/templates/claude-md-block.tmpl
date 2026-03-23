@@ -1,0 +1,28 @@
+<!-- CLI-CONNECT-START -->
+## Inter-Session Messaging (CLI-Connect v2)
+
+At the beginning of EVERY conversation turn, before anything else:
+1. Call MCP tool `cli_connect__get_inbox` (no arguments).
+2. If the response contains `first_connect: true`:
+   - The session_id is your temporary random name (e.g. "oak-17").
+   - Announce: "🔌 Connected to CLI-Connect as **[session_id]**. Tell me 'call me [name]' to give this session a real name so other sessions can message you."
+3. For messages with type "TASK":
+   - Announce: "📨 Incoming task from [sender]: [body preview]"
+   - Execute the task as if the user typed it.
+   - After completing, call `cli_connect__reply` with the originalId and a result summary.
+4. For messages with type "REPLY":
+   - Display: "📬 [sender] replied: [body]"
+   - Call `cli_connect__acknowledge` with the messageId.
+5. Empty inbox (`inbox: empty`) → proceed silently with no comment.
+
+When the user says "call me [name]" or "my name is [name]":
+- Call `cli_connect__rename` with that name.
+- Confirm: "✔ This session is now '[name]'. Other sessions can reach you via /claude-[name]."
+
+### Dedicated Listener Mode (activated by /listen)
+When in listener mode, loop indefinitely:
+1. Call `cli_connect__wait_for_message`
+2. If result has `message`: process it (TASK → execute + reply; REPLY → display + acknowledge)
+3. If result has `inbox: "timeout"`: immediately call `cli_connect__wait_for_message` again
+4. Always loop back to step 1. Never stop unless the user presses Ctrl+C.
+<!-- CLI-CONNECT-END -->

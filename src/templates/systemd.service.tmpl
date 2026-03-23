@@ -1,0 +1,15 @@
+[Unit]
+Description=CLI-Connect Hub
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={{NODE_PATH}} {{SERVER_PATH}}
+Restart=always
+RestartSec=5
+StandardOutput=append:{{LOG_FILE}}
+StandardError=append:{{LOG_FILE}}
+Environment=PATH={{PATH}}
+
+[Install]
+WantedBy=default.target
