@@ -153,36 +153,21 @@ function authMiddleware(req, res, next) {
 }
 
 // ---------------------------------------------------------------------------
-// MCP tool definitions
+// MCP tool definitions  (v2.1 — consolidated 5-tool set)
 // ---------------------------------------------------------------------------
 const TOOLS = [
   {
-    name: 'cli_connect__get_inbox',
+    name: 'cli_connect__poll',
     description:
-      'Check your CLI-Connect inbox for incoming tasks and replies. ' +
-      'Call this at the start of every conversation turn. ' +
-      'On first call, also returns your session ID so you can announce it to the user.',
+      'Your single inbox tool. Checks inbox immediately; if empty, blocks up to 30s for a message. ' +
+      'On the very first call it also returns your session ID / auto_name. ' +
+      'Reply messages are auto-acknowledged on delivery — no separate acknowledge call needed. ' +
+      'Returns JSON: {"message":{...}} for a message, or {"inbox":"timeout"} when nothing arrived in 30s.',
     inputSchema: { type: 'object', properties: {}, required: [] }
   },
   {
-    name: 'cli_connect__rename',
-    description:
-      'Give this session a memorable name (e.g. "backend", "frontend"). ' +
-      'After renaming, other sessions can message you via /claude-<name>.',
-    inputSchema: {
-      type: 'object',
-      properties: { name: { type: 'string', description: 'Your chosen session name (alphanumeric, hyphens ok)' } },
-      required: ['name']
-    }
-  },
-  {
-    name: 'cli_connect__whoami',
-    description: 'Returns this session\'s current short ID and name (if set).',
-    inputSchema: { type: 'object', properties: {}, required: [] }
-  },
-  {
-    name: 'cli_connect__send_message',
-    description: 'Send a task to another named CLI-Connect session.',
+    name: 'cli_connect__send',
+    description: 'Send a task to another named CLI-Connect session. Returns the sent_id you need to match the reply.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -205,22 +190,17 @@ const TOOLS = [
     }
   },
   {
-    name: 'cli_connect__acknowledge',
-    description: 'Acknowledge a reply message, removing it from your inbox.',
+    name: 'cli_connect__rename',
+    description: 'Give this session a memorable name. After renaming, others can reach you via /claude-<name>.',
     inputSchema: {
       type: 'object',
-      properties: { messageId: { type: 'string', description: 'Reply message ID to acknowledge' } },
-      required: ['messageId']
+      properties: { name: { type: 'string', description: 'Session name (alphanumeric, hyphens ok)' } },
+      required: ['name']
     }
   },
   {
     name: 'cli_connect__list_sessions',
     description: 'List all active named CLI-Connect sessions on this machine.',
-    inputSchema: { type: 'object', properties: {}, required: [] }
-  },
-  {
-    name: 'cli_connect__wait_for_message',
-    description: 'Block until a message arrives (up to 30s), returned immediately when one arrives. Returns {inbox:"timeout"} on timeout. Call in a loop for dedicated listener mode.',
     inputSchema: { type: 'object', properties: {}, required: [] }
   }
 ];
@@ -237,6 +217,100 @@ function makeToolHandler(transportSessionId) {
     if (!conn) throw new Error('Session connection not found.');
 
     switch (name) {
+
+      // ── NEW v2.1 tools ────────────────────────────────────────────────────
+
+      case 'cli_connect__poll': {
+        const isFirst = firstInboxCall;
+        firstInboxCall = false;
+
+        // On first call, claim a pending name reservation
+        let autoName = null;
+        if (isFirst && !conn.name) {
+          const now = Date.now();
+          const idx = pendingNames.findIndex(p => now - p.reservedAt < 60000);
+          if (idx !== -1) autoName = pendingNames.splice(idx, 1)[0].name;
+        }
+
+        const headerLines = [];
+        if (isFirst) {
+          headerLines.push(`session_id: ${conn.shortId}`);
+          if (conn.name) headerLines.push(`session_name: ${conn.name}`);
+          else {
+            headerLines.push('first_connect: true');
+            if (autoName) headerLines.push(`auto_name: ${autoName}`);
+          }
+        }
+
+        // Helper: deliver a single message — auto-acks replies, marks tasks processing
+        const deliver = (msg) => {
+          if (msg.type === 'reply') {
+            const i = conn.inbox.findIndex(m => m.id === msg.id);
+            if (i !== -1) conn.inbox.splice(i, 1);  // auto-acknowledge
+          } else {
+            msg.status = 'processing';
+          }
+          saveState();
+          // Compact output — only fields Claude needs
+          const compact = { type: msg.type, id: msg.id, from: msg.from, body: msg.body };
+          if (msg.originalId) compact.originalId = msg.originalId;
+          const lines = [...headerLines, JSON.stringify(compact)];
+          return { content: [{ type: 'text', text: lines.join('\n') }] };
+        };
+
+        // Check inbox immediately
+        const pending = conn.inbox.find(m => m.status === 'pending');
+        if (pending) return deliver(pending);
+
+        // Return first_connect info immediately (don't block on first call)
+        if (isFirst) {
+          return { content: [{ type: 'text', text: [...headerLines, 'inbox: empty'].join('\n') }] };
+        }
+
+        // Block up to 60s
+        return new Promise((resolve) => {
+          const timer = setTimeout(() => {
+            conn.waiter = null;
+            resolve({ content: [{ type: 'text', text: 'timeout' }] });
+          }, 60000);
+          conn.waiter = (msg) => {
+            clearTimeout(timer);
+            conn.waiter = null;
+            resolve(deliver(msg));
+          };
+        });
+      }
+
+      // ── Legacy wait_for_message — also increase timeout to 60s ───────────
+      // (kept for backwards compat but not in TOOLS array)
+
+      case 'cli_connect__send': {
+        const { to, body } = args;
+        const targetTid = nameIndex[to];
+        const target = targetTid ? connections[targetTid] : null;
+        if (!target) throw new Error(`No active session named "${to}". Use cli_connect__list_sessions to see who's online.`);
+
+        const msgId = uuidv4();
+        const msg = {
+          id: msgId, from: conn.name || conn.shortId, to,
+          body, type: 'task', status: 'pending',
+          createdAt: new Date().toISOString(), repliedAt: null, reply: null
+        };
+        target.inbox.push(msg);
+        if (target.waiter) target.waiter(msg);
+        saveState();
+
+        try {
+          require('node-notifier').notify({
+            title: `CLI-Connect: task from ${conn.name || conn.shortId}`,
+            message: body.substring(0, 80)
+          });
+        } catch (_) {}
+
+        return { content: [{ type: 'text', text: `sent_id: ${msgId}` }] };
+      }
+
+      // ── Legacy tools (kept for backwards compat, not exposed in TOOLS array) ─
 
       case 'cli_connect__get_inbox': {
         const isFirst = firstInboxCall;
@@ -443,7 +517,7 @@ function makeToolHandler(transportSessionId) {
           const timer = setTimeout(() => {
             conn.waiter = null;
             resolve({ content: [{ type: 'text', text: JSON.stringify({ inbox: 'timeout' }) }] });
-          }, 30000);
+          }, 60000);
           conn.waiter = (msg) => {
             clearTimeout(timer);
             conn.waiter = null;

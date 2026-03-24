@@ -100,18 +100,18 @@ async function setup() {
   // 8. Write /listen slash command
   const listenContent = `You are entering Daemon Listener Mode for CLI-Connect.
 
-Announce: "👂 Daemon listener active. Waiting for messages. Press Ctrl+C to stop."
+Announce: "👂 Listening. Press Ctrl+C to stop."
 
 Then execute this loop forever — no exceptions:
-1. Call cli_connect__wait_for_message
-2. Got TASK: execute it silently → call cli_connect__reply with result → GOTO 1
-3. Got REPLY: call cli_connect__acknowledge → GOTO 1
-4. Got timeout (inbox: "timeout"): GOTO 1 immediately
+1. Call cli_connect__poll
+2. Got {"inbox":"timeout"}: GOTO 1 immediately (silent)
+3. Got {"message":{...}} with type "task": execute silently → call cli_connect__reply → output "📨 Received from [from]: ..." + "📤 Replied: ..." → GOTO 1
+4. Got {"message":{...}} with type "reply": output "📬 [from] replied: ..." → GOTO 1 (already auto-acknowledged)
 
 ABSOLUTE RULES:
-- Do NOT output any text between messages
-- Do NOT ask the human anything
-- Do NOT end the loop
+- Output NOTHING between messages except the 2-line summaries above
+- Ask NOTHING
+- NEVER stop — inbox:timeout is normal, keep looping
 - ONLY stop if the human presses Ctrl+C
 `;
   fs.writeFileSync(path.join(COMMANDS_DIR, 'listen.md'), listenContent);
@@ -164,26 +164,40 @@ function configureMCP() {
   fs.writeFileSync(CLAUDE_JSON, JSON.stringify(claudeJson, null, 2));
   console.log('✔ MCP SSE endpoint configured in ~/.claude.json');
 
-  // Also ensure cli-connect tools are pre-approved in ~/.claude/settings.json
+  // Add cli-connect tools to ~/.claude/settings.json permissions — ONLY touch permissions.allow,
+  // never overwrite other keys (model, hooks, enabledPlugins, etc.)
+  const cliConnectTools = [
+    'mcp__cli-connect__poll',
+    'mcp__cli-connect__send',
+    'mcp__cli-connect__reply',
+    'mcp__cli-connect__rename',
+    'mcp__cli-connect__list_sessions',
+    'Bash'
+  ];
+  // Remove old tool names from previous versions
+  const oldTools = [
+    'mcp__cli-connect__get_inbox',
+    'mcp__cli-connect__wait_for_message',
+    'mcp__cli-connect__acknowledge',
+    'mcp__cli-connect__whoami',
+    'mcp__cli-connect__send_message'
+  ];
   let settings = {};
   try {
     if (fs.existsSync(SETTINGS_FILE)) {
       settings = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8'));
     }
-  } catch (_) {}
+  } catch (_) {
+    // If parse fails, start with empty object but warn
+    console.warn('  (Warning: could not parse existing settings.json — starting fresh)');
+  }
+  // Deep-merge: only modify permissions.allow
   if (!settings.permissions) settings.permissions = {};
   if (!settings.permissions.allow) settings.permissions.allow = [];
-  const toolsToAllow = [
-    'mcp__cli-connect__get_inbox',
-    'mcp__cli-connect__rename',
-    'mcp__cli-connect__whoami',
-    'mcp__cli-connect__send_message',
-    'mcp__cli-connect__reply',
-    'mcp__cli-connect__acknowledge',
-    'mcp__cli-connect__list_sessions',
-    'mcp__cli-connect__wait_for_message'
-  ];
-  for (const t of toolsToAllow) {
+  // Remove old tool names
+  settings.permissions.allow = settings.permissions.allow.filter(t => !oldTools.includes(t));
+  // Add new tools if not already present
+  for (const t of cliConnectTools) {
     if (!settings.permissions.allow.includes(t)) {
       settings.permissions.allow.push(t);
     }

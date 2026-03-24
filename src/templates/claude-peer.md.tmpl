@@ -1,19 +1,14 @@
-Send a task to {{PEER_NAME}} and wait for their reply automatically.
+Send a task to {{PEER_NAME}} and wait for their reply.
 
-1. Call `cli_connect__send_message`:
-   - to: "{{PEER_NAME}}"
-   - body: "$ARGUMENTS"
-   Note the returned message ID.
+1. Call `cli_connect__send` with to="{{PEER_NAME}}" and body="$ARGUMENTS". Note the returned `sent_id`.
+2. Output ONLY: `📤 Sent to {{PEER_NAME}}: $ARGUMENTS`
 
-2. Announce: "📤 Sent to {{PEER_NAME}}. Waiting for reply..."
-
-3. Loop until the reply arrives:
-   a. Call `cli_connect__wait_for_message`
-   b. If result has `message` with type "reply" and originalId matching your sent message ID:
-      - Display: "📬 {{PEER_NAME}} replied: [body]"
-      - Call `cli_connect__acknowledge` with the messageId
-      - STOP looping. Return control to the human.
-   c. If result has `message` with type "task":
-      - It's an unrelated incoming task — process it (execute + reply), then continue looping
-   d. If result has `inbox: "timeout"`:
-      - Loop again immediately (keep waiting)
+3. Wait for reply — loop:
+   a. Call `cli_connect__poll`
+   b. Got `{"message":{...}}` with type "reply" and originalId matching sent_id:
+      - Output ONLY: `📬 {{PEER_NAME}} replied: [body]`
+      - (Auto-acknowledged — no acknowledge call needed.)
+      - STOP. Return control to the human.
+   c. Got `{"message":{...}}` with type "task":
+      - Execute it silently → call `cli_connect__reply` → continue loop
+   d. Got `{"inbox":"timeout"}` → loop again immediately (no output)

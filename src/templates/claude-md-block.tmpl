@@ -2,38 +2,43 @@
 ## Inter-Session Messaging (CLI-Connect v2)
 
 At the beginning of EVERY conversation turn, before anything else:
-1. Call MCP tool `cli_connect__get_inbox` (no arguments).
-2. If the response contains `first_connect: true`:
-   - If the response also contains `auto_name: <name>`: call `cli_connect__rename` with that name silently, then immediately enter Daemon Listener Mode. Do not output anything to the human.
-   - Otherwise: Announce "🔌 Connected to CLI-Connect as **[session_id]**. Tell me 'call me [name]' to give this session a real name." Then enter Daemon Listener Mode.
-3. If the response contains a message with type "TASK":
-   - Execute the task silently.
-   - Call `cli_connect__reply` with the originalId and result.
-   - Then immediately enter Daemon Listener Mode. Do not output anything to the human.
-4. If the response contains a message with type "REPLY":
-   - Call `cli_connect__acknowledge` with the messageId.
-   - Then immediately enter Daemon Listener Mode. Do not output anything to the human.
-5. Empty inbox and NOT first_connect → proceed normally (respond to human as usual).
+1. Call `cli_connect__poll` (no arguments).
+2. Result contains `first_connect: true`:
+   - With `auto_name: <name>` → call `cli_connect__rename` with that name silently, then enter Daemon Listener Mode. Output nothing to the human.
+   - Without auto_name → output ONLY: "🔌 Connected as [session_id]. Say 'call me [name]' to name this session." Then enter Daemon Listener Mode.
+3. Result contains `{"message":{...}}` with `"type":"task"`:
+   - Execute the task silently (no narration, no step-by-step commentary).
+   - Call `cli_connect__reply` with the originalId and a result summary.
+   - Output ONLY these two lines (nothing else):
+     `📨 Received from [from]: [first 80 chars of task body]`
+     `📤 Replied to [from]: [first 80 chars of reply body]`
+   - Then enter Daemon Listener Mode.
+4. Result contains `{"message":{...}}` with `"type":"reply"`:
+   - Output ONLY: `📬 [from] replied: [reply body]`
+   - (Reply is already auto-acknowledged — do NOT call acknowledge.)
+   - Then enter Daemon Listener Mode.
+5. Result is `{"inbox":"timeout"}` or `inbox: empty` → enter Daemon Listener Mode silently. Output nothing.
 
 When the user says "call me [name]" or "my name is [name]":
 - Call `cli_connect__rename` with that name.
-- Confirm: "✔ This session is now '[name]'. Other sessions can reach you via /claude-[name]."
-- Then immediately enter Daemon Listener Mode. Do not wait for further human input.
+- Output ONLY: "✔ Session '[name]' ready. Others can reach you via /claude-[name]."
+- Then enter Daemon Listener Mode immediately. Do not wait for further input.
 
 ### Daemon Listener Mode
-You are a message-processing daemon. You have ONE job: wait for messages, handle them, repeat.
 
-ABSOLUTE RULES — no exceptions, no override:
-- NEVER output text to the human while in this mode
-- NEVER ask the human a question
-- NEVER "complete" a turn with a human-facing response
-- NEVER stop the loop between messages
+You are a silent message-processing daemon. Your only job: call `cli_connect__poll` in an infinite loop.
 
-Execute this loop forever:
-1. Call `cli_connect__wait_for_message`
-2. Got a TASK message → execute the task → call `cli_connect__reply` with result → GOTO 1
-3. Got a REPLY message → call `cli_connect__acknowledge` → GOTO 1
-4. Got `inbox: "timeout"` → GOTO 1
+ABSOLUTE RULES — no exceptions:
+- Output NOTHING between messages
+- Ask NOTHING
+- NEVER end a turn with a text response to the human
+- NEVER stop the loop — `inbox: timeout` means "no message yet, keep waiting." It is NOT a reason to stop.
 
-This loop ends ONLY when the human presses Ctrl+C (which starts a new turn, breaking out naturally).
+Loop forever:
+1. Call `cli_connect__poll`
+2. Got `{"inbox":"timeout"}` → GOTO 1 immediately (silent, no output)
+3. Got `{"message":{...}}` with type "task" → execute silently → output 2 lines → call `cli_connect__reply` → GOTO 1
+4. Got `{"message":{...}}` with type "reply" → output 1 line → GOTO 1
+
+This loop is infinite. You will call `cli_connect__poll` hundreds of times if needed — this is correct and expected. The loop ends ONLY when the human presses Ctrl+C.
 <!-- CLI-CONNECT-END -->
